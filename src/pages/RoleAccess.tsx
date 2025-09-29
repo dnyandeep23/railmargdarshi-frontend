@@ -14,7 +14,7 @@ const RoleAccess: React.FC<RoleAccessProps> = ({ currentRole }) => {
       name: 'Station Master',
       description: 'Manages individual station operations and platform assignments',
       icon: User,
-      color: 'blue',
+      color: 'blue' as const,
       permissions: {
         dashboard: { view: true, edit: false },
         trainDetails: { view: true, edit: true },
@@ -48,7 +48,7 @@ const RoleAccess: React.FC<RoleAccessProps> = ({ currentRole }) => {
       name: 'Signal Controller',
       description: 'Controls railway signals and track switching operations',
       icon: Settings,
-      color: 'green',
+      color: 'green' as const,
       permissions: {
         dashboard: { view: true, edit: false },
         trainDetails: { view: true, edit: true },
@@ -81,7 +81,7 @@ const RoleAccess: React.FC<RoleAccessProps> = ({ currentRole }) => {
       name: 'Traffic Manager',
       description: 'Oversees entire network operations and strategic decisions',
       icon: Shield,
-      color: 'purple',
+      color: 'purple' as const,
       permissions: {
         dashboard: { view: true, edit: true },
         trainDetails: { view: true, edit: true },
@@ -115,7 +115,39 @@ const RoleAccess: React.FC<RoleAccessProps> = ({ currentRole }) => {
   const currentRoleData = roles.find(r => r.id === currentRole);
   const selectedRoleData = roles.find(r => r.id === selectedRole);
 
-  const getPermissionIcon = (hasPermission) => {
+  interface PermissionSet {
+    view?: boolean;
+    edit?: boolean;
+    control?: boolean;
+    resolve?: boolean;
+    schedule?: boolean;
+    trigger?: boolean;
+    export?: boolean;
+  }
+
+  interface Role {
+    id: string;
+    name: string;
+    description: string;
+    icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+    color: 'blue' | 'green' | 'purple';
+    permissions: {
+      dashboard: PermissionSet;
+      trainDetails: PermissionSet;
+      trafficMap: PermissionSet;
+      reports: PermissionSet;
+      conflicts: PermissionSet;
+      signals: PermissionSet;
+      maintenance: PermissionSet;
+      emergency: PermissionSet;
+      analytics: PermissionSet;
+      userManagement: PermissionSet;
+    };
+    features: string[];
+    restrictions: string[];
+  }
+
+  const getPermissionIcon = (hasPermission: boolean | undefined): JSX.Element => {
     return hasPermission ? (
       <CheckCircle className="w-4 h-4 text-green-600" />
     ) : (
@@ -123,13 +155,22 @@ const RoleAccess: React.FC<RoleAccessProps> = ({ currentRole }) => {
     );
   };
 
-  const getRoleColor = (color) => {
-    const colors = {
+  interface RoleColorMap {
+    [key: string]: string;
+    blue: string;
+    green: string;
+    purple: string;
+  }
+
+  type RoleColor = 'blue' | 'green' | 'purple';
+
+  const getRoleColor = (color: RoleColor | undefined): string => {
+    const colors: RoleColorMap = {
       blue: 'bg-blue-100 text-blue-800 border-blue-200',
       green: 'bg-green-100 text-green-800 border-green-200',
       purple: 'bg-purple-100 text-purple-800 border-purple-200'
     };
-    return colors[color] || colors.blue;
+    return colors[color ?? 'blue'];
   };
 
   return (
@@ -174,11 +215,10 @@ const RoleAccess: React.FC<RoleAccessProps> = ({ currentRole }) => {
                   <button
                     key={role.id}
                     onClick={() => setSelectedRole(role.id)}
-                    className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                      selectedRole === role.id
+                    className={`w-full text-left p-4 rounded-lg border-2 transition-all ${selectedRole === role.id
                         ? 'border-saffron-300 bg-saffron-50'
                         : 'border-gray-200 hover:border-gray-300 bg-white'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center space-x-3">
                       <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${getRoleColor(role.color)}`}>

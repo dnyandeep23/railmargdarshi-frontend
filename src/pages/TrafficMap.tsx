@@ -11,7 +11,12 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [selectedZone, setSelectedZone] = useState('all');
-  const [selectedElement, setSelectedElement] = useState(null);
+  const [selectedElement, setSelectedElement] = useState<
+    | { type: 'station'; data: typeof stations[number] }
+    | { type: 'train'; data: typeof trains[number] }
+    | { type: 'conflict'; data: typeof conflicts[number] }
+    | null
+  >(null);
   const mapRef = useRef(null);
 
   const zones = [
@@ -54,12 +59,12 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     { id: '2', location: { x: 280, y: 380 }, severity: 'medium', trains: ['12346', '12350'] },
   ];
 
-  const handleMouseDown = (e) => {
+  const handleMouseDown = (e: { clientX: number; clientY: number; }) => {
     setIsDragging(true);
     setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
-  const handleMouseMove = (e) => {
+  const handleMouseMove = (e: { clientX: number; clientY: number; }) => {
     if (isDragging) {
       setPan({
         x: e.clientX - dragStart.x,
@@ -72,8 +77,12 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     setIsDragging(false);
   };
 
-  const handleZoom = (direction) => {
-    setZoom(prev => {
+  interface ZoomDirection {
+    direction: 'in' | 'out';
+  }
+
+  const handleZoom = (direction: ZoomDirection['direction']) => {
+    setZoom((prev: number) => {
       const newZoom = direction === 'in' ? prev * 1.2 : prev / 1.2;
       return Math.max(0.5, Math.min(3, newZoom));
     });
@@ -84,7 +93,11 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     setPan({ x: 0, y: 0 });
   };
 
-  const getStationColor = (status) => {
+  interface StationStatus {
+    status: 'operational' | 'maintenance' | 'blocked' | string;
+  }
+
+  const getStationColor = (status: StationStatus['status']): string => {
     switch (status) {
       case 'operational': return 'fill-green-500 stroke-green-700';
       case 'maintenance': return 'fill-yellow-500 stroke-yellow-700';
@@ -93,7 +106,7 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     }
   };
 
-  const getTrainColor = (status) => {
+  const getTrainColor = (status: string) => {
     switch (status) {
       case 'on-time': return 'fill-green-600';
       case 'delayed': return 'fill-red-600';
@@ -102,7 +115,7 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     }
   };
 
-  const getTrackColor = (status) => {
+  const getTrackColor = (status: string) => {
     switch (status) {
       case 'free': return 'stroke-green-500';
       case 'occupied': return 'stroke-yellow-500';
@@ -169,7 +182,7 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
             <h3 className="text-lg font-semibold">Network Overview</h3>
             <p className="text-blue-200 text-sm">Zoom: {(zoom * 100).toFixed(0)}% | Active Trains: {trains.length}</p>
           </div>
-          
+
           <div
             ref={mapRef}
             className="h-96 lg:h-[600px] overflow-hidden cursor-grab active:cursor-grabbing select-none relative bg-gray-100"
@@ -191,7 +204,7 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
               {/* Grid */}
               <defs>
                 <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
-                  <path d="M 50 0 L 0 0 0 50" fill="none" stroke="rgb(200, 200, 200)" strokeWidth="1" opacity="0.3"/>
+                  <path d="M 50 0 L 0 0 0 50" fill="none" stroke="rgb(200, 200, 200)" strokeWidth="1" opacity="0.3" />
                 </pattern>
               </defs>
               <rect width="100%" height="100%" fill="url(#grid)" />
@@ -202,7 +215,7 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
                   const fromStation = stations.find(s => s.code === segment.from);
                   const toStation = stations.find(s => s.code === segment.to);
                   if (!fromStation || !toStation) return null;
-                  
+
                   return (
                     <line
                       key={segment.id}
@@ -349,9 +362,9 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
             <div className="bg-white rounded-lg shadow-lg p-6">
               <h3 className="text-lg font-semibold text-navy-900 mb-4">
                 {selectedElement.type === 'station' ? 'Station Details' :
-                 selectedElement.type === 'train' ? 'Train Details' : 'Conflict Details'}
+                  selectedElement.type === 'train' ? 'Train Details' : 'Conflict Details'}
               </h3>
-              
+
               {selectedElement.type === 'station' && (
                 <div className="space-y-3">
                   <div>
@@ -368,9 +381,8 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
                   </div>
                   <div>
                     <span className="text-gray-600">Status:</span>
-                    <span className={`ml-2 font-medium capitalize ${
-                      selectedElement.data.status === 'operational' ? 'text-green-600' : 'text-yellow-600'
-                    }`}>
+                    <span className={`ml-2 font-medium capitalize ${selectedElement.data.status === 'operational' ? 'text-green-600' : 'text-yellow-600'
+                      }`}>
                       {selectedElement.data.status}
                     </span>
                   </div>
@@ -407,10 +419,9 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
                   </div>
                   <div>
                     <span className="text-gray-600">Status:</span>
-                    <span className={`ml-2 font-medium capitalize ${
-                      selectedElement.data.status === 'on-time' ? 'text-green-600' :
-                      selectedElement.data.status === 'delayed' ? 'text-red-600' : 'text-blue-600'
-                    }`}>
+                    <span className={`ml-2 font-medium capitalize ${selectedElement.data.status === 'on-time' ? 'text-green-600' :
+                        selectedElement.data.status === 'delayed' ? 'text-red-600' : 'text-blue-600'
+                      }`}>
                       {selectedElement.data.status}
                     </span>
                   </div>
@@ -435,9 +446,8 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
                 <div className="space-y-3">
                   <div>
                     <span className="text-gray-600">Severity:</span>
-                    <span className={`ml-2 font-medium capitalize ${
-                      selectedElement.data.severity === 'high' ? 'text-red-600' : 'text-yellow-600'
-                    }`}>
+                    <span className={`ml-2 font-medium capitalize ${selectedElement.data.severity === 'high' ? 'text-red-600' : 'text-yellow-600'
+                      }`}>
                       {selectedElement.data.severity}
                     </span>
                   </div>

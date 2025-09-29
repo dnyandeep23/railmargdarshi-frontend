@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import StatsCard from '../components/StatsCard';
 import AlertsPanel from '../components/AlertsPanel';
 import { TrendingUp, Clock, AlertTriangle, CheckCircle, Brain as Train, MapPin } from 'lucide-react';
+import { fetchUpcomingConflicts } from '../api';
 
 interface DashboardProps {
   currentRole: string;
@@ -13,33 +14,33 @@ const Dashboard: React.FC<DashboardProps> = ({ currentRole }) => {
       title: 'On-Time Performance',
       value: '87.5%',
       change: '+2.3%',
-      trend: 'up',
+      trend: 'up' as 'up',
       icon: CheckCircle,
-      color: 'green'
+      color: 'green' as 'green'
     },
     {
       title: 'Active Trains',
       value: '1,247',
       change: '+45',
-      trend: 'up',
+      trend: 'up' as 'up',
       icon: Train,
-      color: 'blue'
+      color: 'blue' as 'blue'
     },
     {
       title: 'Average Delay',
       value: '12.3 min',
       change: '-1.8 min',
-      trend: 'down',
+      trend: 'down' as 'down',
       icon: Clock,
-      color: 'yellow'
+      color: 'yellow' as 'yellow'
     },
     {
       title: 'Active Conflicts',
       value: '7',
       change: '-2',
-      trend: 'down',
+      trend: 'down' as 'down',
       icon: AlertTriangle,
-      color: 'red'
+      color: 'red' as 'red'
     }
   ];
 
@@ -51,32 +52,22 @@ const Dashboard: React.FC<DashboardProps> = ({ currentRole }) => {
     { time: '14:05', action: 'Priority given to Rajdhani Express at Kanpur', zone: 'North Central Railway' },
   ];
 
-  const upcomingConflicts = [
-    {
-      id: '1',
-      trains: ['12345 Shatabdi Express', '12346 Rajdhani Express'],
-      location: 'New Delhi Junction',
-      time: '15:30',
-      severity: 'high',
-      eta: '25 min'
-    },
-    {
-      id: '2',
-      trains: ['12347 Duronto Express', '12348 Garib Rath'],
-      location: 'Mumbai Central',
-      time: '16:15',
-      severity: 'medium',
-      eta: '1h 10min'
-    },
-    {
-      id: '3',
-      trains: ['12349 Express', '12350 Local'],
-      location: 'Chennai Central',
-      time: '17:00',
-      severity: 'low',
-      eta: '1h 55min'
-    }
-  ];
+  const [upcomingConflicts, setUpcomingConflicts] = useState<any[]>([]);
+  const [upcomingLoading, setUpcomingLoading] = useState(true);
+  const [upcomingError, setUpcomingError] = useState('');
+
+  useEffect(() => {
+    setUpcomingLoading(true);
+    fetchUpcomingConflicts()
+      .then(data => {
+        setUpcomingConflicts(data);
+        setUpcomingLoading(false);
+      })
+      .catch(() => {
+        setUpcomingError('Failed to load upcoming conflicts');
+        setUpcomingLoading(false);
+      });
+  }, []);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -110,27 +101,41 @@ const Dashboard: React.FC<DashboardProps> = ({ currentRole }) => {
               </span>
             </div>
             <div className="space-y-4">
-              {upcomingConflicts.map((conflict) => (
-                <div key={conflict.id} className="border-l-4 border-red-500 pl-4 py-2">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-navy-900">{conflict.location}</span>
-                    <span className="text-xs text-gray-500">ETA: {conflict.eta}</span>
-                  </div>
-                  <div className="text-xs text-gray-600 mb-2">
-                    {conflict.trains.join(' vs ')}
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      conflict.severity === 'high' ? 'bg-red-100 text-red-800' :
-                      conflict.severity === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-blue-100 text-blue-800'
-                    }`}>
-                      {conflict.severity.toUpperCase()}
-                    </span>
-                    <span className="text-xs text-gray-500">{conflict.time}</span>
-                  </div>
+              {upcomingLoading ? (
+                <div className="flex items-center justify-center h-16">
+                  <div className="animate-spin rounded-full h-6 w-6 border-t-4 border-b-4 border-red-500"></div>
+                  <span className="ml-2 text-red-700">Loading...</span>
                 </div>
-              ))}
+              ) : upcomingError ? (
+                <div className="text-red-600">{upcomingError}</div>
+              ) : upcomingConflicts.length === 0 ? (
+                <div className="text-gray-500">No upcoming conflicts.</div>
+              ) : (
+                upcomingConflicts.map((conflict) => (
+                  <div key={conflict._id || conflict.id} className="border-l-4 border-red-500 pl-4 py-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-navy-900">{conflict.location}</span>
+                      <span className="text-xs text-gray-500">
+                        ETA: {conflict.expectedAt ? new Date(conflict.expectedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--'}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-600 mb-2">
+                      {conflict.trainIds?.join(' vs ')}
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${conflict.severity === 'high' ? 'bg-red-100 text-red-800' :
+                        conflict.severity === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-blue-100 text-blue-800'
+                        }`}>
+                        {conflict.severity?.toUpperCase()}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {conflict.estimatedDelay ? `${conflict.estimatedDelay} min` : ''}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 

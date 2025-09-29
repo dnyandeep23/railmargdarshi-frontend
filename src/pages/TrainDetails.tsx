@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { fetchAllTrains, fetchConflicts, applyConflictSuggestion } from '../api';
 import { Search, Filter, Clock, MapPin, AlertTriangle, CheckCircle, Brain as Train } from 'lucide-react';
 
 interface TrainDetailsProps {
@@ -8,95 +9,62 @@ interface TrainDetailsProps {
 const TrainDetails: React.FC<TrainDetailsProps> = ({ currentRole }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
-  const [selectedTrain, setSelectedTrain] = useState(null);
+  interface TrainStop {
+    station: string;
+    arrival: string;
+    departure: string;
+    status: 'current' | 'departed' | 'upcoming';
+  }
 
-  const trains = [
-    {
-      id: '12345',
-      name: 'Shatabdi Express',
-      route: 'New Delhi - Chandigarh',
-      currentStation: 'Ambala Cantt',
-      nextStation: 'Chandigarh',
-      status: 'on-time',
-      delay: 0,
-      speed: 95,
-      zone: 'Northern Railway',
-      schedule: [
-        { station: 'New Delhi', arrival: '06:00', departure: '06:00', status: 'departed' },
-        { station: 'Panipat', arrival: '07:15', departure: '07:17', status: 'departed' },
-        { station: 'Kurukshetra', arrival: '08:05', departure: '08:07', status: 'departed' },
-        { station: 'Ambala Cantt', arrival: '08:45', departure: '08:47', status: 'current' },
-        { station: 'Chandigarh', arrival: '09:30', departure: '09:30', status: 'upcoming' },
-      ]
-    },
-    {
-      id: '12346',
-      name: 'Rajdhani Express',
-      route: 'Mumbai - New Delhi',
-      currentStation: 'Kota Junction',
-      nextStation: 'Sawai Madhopur',
-      status: 'delayed',
-      delay: 25,
-      speed: 110,
-      zone: 'Western Railway',
-      schedule: [
-        { station: 'Mumbai Central', arrival: '16:55', departure: '16:55', status: 'departed' },
-        { station: 'Vadodara', arrival: '20:03', departure: '20:08', status: 'departed' },
-        { station: 'Ratlam', arrival: '22:55', departure: '23:00', status: 'departed' },
-        { station: 'Kota Junction', arrival: '02:05', departure: '02:10', status: 'current' },
-        { station: 'Sawai Madhopur', arrival: '03:15', departure: '03:17', status: 'upcoming' },
-      ]
-    },
-    {
-      id: '12347',
-      name: 'Duronto Express',
-      route: 'Chennai - New Delhi',
-      currentStation: 'Bhopal Junction',
-      nextStation: 'Jhansi',
-      status: 'early',
-      delay: -10,
-      speed: 105,
-      zone: 'Southern Railway',
-      schedule: [
-        { station: 'Chennai Central', arrival: '22:30', departure: '22:30', status: 'departed' },
-        { station: 'Vijayawada', arrival: '04:15', departure: '04:20', status: 'departed' },
-        { station: 'Nagpur', arrival: '14:25', departure: '14:35', status: 'departed' },
-        { station: 'Bhopal Junction', arrival: '19:40', departure: '19:45', status: 'current' },
-        { station: 'Jhansi', arrival: '23:15', departure: '23:20', status: 'upcoming' },
-      ]
-    }
-  ];
+  interface TrainType {
+    id: string;
+    name: string;
+    route: string;
+    zone: string;
+    currentStation: string;
+    nextStation: string;
+    speed: number;
+    status: string;
+    delay: number;
+    schedule: TrainStop[];
+  }
 
-  const conflicts = [
-    {
-      id: '1',
-      trainIds: ['12345', '12348'],
-      location: 'Ambala Junction',
-      type: 'platform-conflict',
-      severity: 'high',
-      estimatedDelay: 15,
-      suggestions: [
-        { action: 'Reroute 12348 to Platform 3', benefit: '10 min saved', risk: 'low' },
-        { action: 'Hold 12345 for 5 minutes', benefit: '5 min saved', risk: 'medium' }
-      ]
-    },
-    {
-      id: '2',
-      trainIds: ['12346', '12349'],
-      location: 'Kota Junction',
-      type: 'track-conflict',
-      severity: 'medium',
-      estimatedDelay: 8,
-      suggestions: [
-        { action: 'Priority to Rajdhani Express', benefit: '8 min saved', risk: 'low' }
-      ]
-    }
-  ];
+  const [selectedTrain, setSelectedTrain] = useState<TrainType | null>(null);
+  const [trains, setTrains] = useState<TrainType[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setLoading(true);
+    fetchAllTrains()
+      .then(data => {
+        setTrains(data);
+        setLoading(false);
+      })
+      .catch(err => {
+        setError('Failed to load train data');
+        setLoading(false);
+      });
+    setConflictsLoading(true);
+    fetchConflicts()
+      .then(data => {
+        setConflicts(data);
+        setConflictsLoading(false);
+      })
+      .catch(err => {
+        setConflictsError('Failed to load conflicts');
+        setConflictsLoading(false);
+      });
+  }, []);
+
+  const [conflicts, setConflicts] = useState<any[]>([]);
+  const [conflictsLoading, setConflictsLoading] = useState(true);
+  const [conflictsError, setConflictsError] = useState('');
 
   const filteredTrains = trains.filter(train => {
     const matchesSearch = train.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         train.id.includes(searchTerm) ||
-                         train.route.toLowerCase().includes(searchTerm.toLowerCase());
+      train.id.includes(searchTerm) ||
+      train.route.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesFilter = filterStatus === 'all' || train.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
@@ -116,6 +84,36 @@ const TrainDetails: React.FC<TrainDetailsProps> = ({ currentRole }) => {
       case 'delayed': return <AlertTriangle className="w-4 h-4" />;
       case 'early': return <Clock className="w-4 h-4" />;
       default: return <Train className="w-4 h-4" />;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
+        <span className="ml-4 text-lg text-blue-700">Loading train data...</span>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <span className="text-lg text-red-600">{error}</span>
+      </div>
+    );
+  }
+
+  const handleApplySuggestion = async (conflictId: string, suggestion: any) => {
+    try {
+      await applyConflictSuggestion(conflictId, suggestion);
+      // Refetch conflicts to update UI
+      setConflictsLoading(true);
+      const updated = await fetchConflicts();
+      setConflicts(updated);
+      setConflictsLoading(false);
+    } catch (err) {
+      setConflictsError('Failed to apply suggestion');
+      setConflictsLoading(false);
     }
   };
 
@@ -192,7 +190,7 @@ const TrainDetails: React.FC<TrainDetailsProps> = ({ currentRole }) => {
                       )}
                     </div>
                   </div>
-                  
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                     <div>
                       <span className="text-gray-600">Route:</span>
@@ -223,46 +221,77 @@ const TrainDetails: React.FC<TrainDetailsProps> = ({ currentRole }) => {
 
         {/* Conflicts & Details Panel */}
         <div className="space-y-6">
-          {/* Active Conflicts */}
+          {/* Active Conflicts (Dynamic) */}
           <div className="bg-white rounded-lg shadow-lg p-6">
             <h3 className="text-lg font-semibold text-navy-900 mb-4">Active Conflicts</h3>
-            <div className="space-y-4">
-              {conflicts.map((conflict) => (
-                <div key={conflict.id} className="border-l-4 border-red-500 pl-4 py-3 bg-red-50 rounded-r-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium text-navy-900">{conflict.location}</span>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      conflict.severity === 'high' ? 'bg-red-100 text-red-800' :
-                      conflict.severity === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-blue-100 text-blue-800'
-                    }`}>
-                      {conflict.severity.toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="text-sm text-gray-600 mb-2">
-                    Trains: {conflict.trainIds.join(', ')}
-                  </div>
-                  <div className="text-sm text-gray-600 mb-3">
-                    Est. Delay: {conflict.estimatedDelay} minutes
-                  </div>
-                  <div className="space-y-2">
-                    {conflict.suggestions.map((suggestion, index) => (
-                      <div key={index} className="bg-white p-2 rounded border">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">{suggestion.action}</span>
-                          <button className="bg-saffron-500 hover:bg-saffron-600 text-white px-2 py-1 rounded text-xs transition-colors">
-                            Apply
-                          </button>
+            {conflictsLoading ? (
+              <div className="flex items-center justify-center h-24">
+                <div className="animate-spin rounded-full h-8 w-8 border-t-4 border-b-4 border-red-500"></div>
+                <span className="ml-2 text-red-700">Loading conflicts...</span>
+              </div>
+            ) : conflictsError ? (
+              <div className="text-red-600">{conflictsError}</div>
+            ) : conflicts.length === 0 ? (
+              <div className="text-gray-500">No active conflicts found.</div>
+            ) : (
+              <div className="space-y-4">
+                {conflicts.map((conflict) => (
+                  <div
+                    key={conflict._id || conflict.id}
+                    className={`border-l-4 pl-4 py-3 rounded-r-lg ${conflict.resolved ? 'border-green-500 bg-green-50 opacity-80' : 'border-red-500 bg-red-50'}`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-medium text-navy-900">{conflict.location}</span>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${conflict.severity === 'high' ? 'bg-red-100 text-red-800' :
+                        conflict.severity === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-blue-100 text-blue-800'
+                        }`}>
+                        {conflict.severity?.toUpperCase()}
+                      </span>
+                      {conflict.resolved && (
+                        <span className="ml-2 px-2 py-1 rounded-full bg-green-200 text-green-800 text-xs font-semibold">Resolved</span>
+                      )}
+                    </div>
+                    <div className="text-sm text-gray-600 mb-2">
+                      Trains: {conflict.trainIds?.join(', ')}
+                    </div>
+                    <div className="text-sm text-gray-600 mb-3">
+                      Est. Delay: {conflict.estimatedDelay} minutes
+                    </div>
+                    <div className="space-y-2">
+                      {conflict.resolved && conflict.suggestions?.length === 1 ? (
+                        <div className="bg-green-50 border border-green-400 p-2 rounded">
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium text-green-800">{conflict.suggestions[0].action}</span>
+                            <span className="px-2 py-1 rounded bg-green-500 text-white text-xs">Resolved</span>
+                          </div>
+                          <div className="text-xs text-green-700 mt-1">
+                            {conflict.suggestions[0].benefit} • {conflict.suggestions[0].risk} risk
+                          </div>
                         </div>
-                        <div className="text-xs text-gray-600 mt-1">
-                          {suggestion.benefit} • {suggestion.risk} risk
-                        </div>
-                      </div>
-                    ))}
+                      ) : (
+                        conflict.suggestions?.map((suggestion: any, index: number) => (
+                          <div key={index} className="bg-white p-2 rounded border">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-medium">{suggestion.action}</span>
+                              <button
+                                className="bg-saffron-500 hover:bg-saffron-600 text-white px-2 py-1 rounded text-xs transition-colors"
+                                onClick={() => handleApplySuggestion(conflict._id || conflict.id, suggestion)}
+                              >
+                                Apply
+                              </button>
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              {suggestion.benefit} • {suggestion.risk} risk
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Train Schedule Detail */}
@@ -273,15 +302,13 @@ const TrainDetails: React.FC<TrainDetailsProps> = ({ currentRole }) => {
               </h3>
               <div className="space-y-3">
                 {selectedTrain.schedule.map((stop, index) => (
-                  <div key={index} className={`flex items-center justify-between p-3 rounded-lg ${
-                    stop.status === 'current' ? 'bg-saffron-50 border border-saffron-200' :
+                  <div key={index} className={`flex items-center justify-between p-3 rounded-lg ${stop.status === 'current' ? 'bg-saffron-50 border border-saffron-200' :
                     stop.status === 'departed' ? 'bg-green-50' : 'bg-gray-50'
-                  }`}>
+                    }`}>
                     <div className="flex items-center space-x-3">
-                      <div className={`w-3 h-3 rounded-full ${
-                        stop.status === 'current' ? 'bg-saffron-500' :
+                      <div className={`w-3 h-3 rounded-full ${stop.status === 'current' ? 'bg-saffron-500' :
                         stop.status === 'departed' ? 'bg-green-500' : 'bg-gray-400'
-                      }`} />
+                        }`} />
                       <div>
                         <div className="font-medium text-navy-900">{stop.station}</div>
                         <div className="text-sm text-gray-600">
@@ -289,11 +316,10 @@ const TrainDetails: React.FC<TrainDetailsProps> = ({ currentRole }) => {
                         </div>
                       </div>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${
-                      stop.status === 'current' ? 'bg-saffron-100 text-saffron-800' :
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${stop.status === 'current' ? 'bg-saffron-100 text-saffron-800' :
                       stop.status === 'departed' ? 'bg-green-100 text-green-800' :
-                      'bg-gray-100 text-gray-800'
-                    }`}>
+                        'bg-gray-100 text-gray-800'
+                      }`}>
                       {stop.status}
                     </span>
                   </div>

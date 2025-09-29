@@ -1,28 +1,43 @@
 import React, { useState } from 'react';
+import { logout } from '../api';
+import { useNavigate } from 'react-router-dom';
+import { useUser } from '../context/UserContext';
 import { Link, useLocation } from 'react-router-dom';
-import { Brain as Train, Bell, User, ChevronDown, Menu, X } from 'lucide-react';
+import { Brain as Train, Bell, User, Menu, X } from 'lucide-react';
 
 interface NavbarProps {
   currentRole: string;
-  onRoleChange: (role: string) => void;
 }
 
-const Navbar: React.FC<NavbarProps> = ({ currentRole, onRoleChange }) => {
+const Navbar: React.FC<NavbarProps> = ({ currentRole }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const { setUser } = useUser();
+  const handleLogout = async () => {
+    try {
+      await logout();
+      setUser(null);
+      navigate('/logout');
+    } catch {
+      alert('Logout failed');
+    }
+  };
 
   const roles = [
-    { id: 'station-master', name: 'Station Master' },
-    { id: 'signal-controller', name: 'Signal Controller' },
-    { id: 'traffic-manager', name: 'Traffic Manager' },
+    { id: 'admin', name: 'Admin' },
+    { id: 'stationmaster', name: 'Station Master' },
+    { id: 'signalcontroller', name: 'Signal Controller' },
+    { id: 'user', name: 'User' },
   ];
 
   const navItems = [
     { path: '/', label: 'Dashboard' },
     { path: '/trains', label: 'Train Details' },
     { path: '/map', label: 'Traffic Map' },
-    { path: '/reports', label: 'Reports' },
+    // Reports only for admin
+    ...(currentRole === 'admin' ? [{ path: '/reports', label: 'Reports' }] : []),
     { path: '/roles', label: 'Role Access' },
   ];
 
@@ -49,11 +64,10 @@ const Navbar: React.FC<NavbarProps> = ({ currentRole, onRoleChange }) => {
               <Link
                 key={item.path}
                 to={item.path}
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  location.pathname === item.path
-                    ? 'bg-saffron-500 text-white'
-                    : 'text-gray-300 hover:bg-navy-700 hover:text-white'
-                }`}
+                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${location.pathname === item.path
+                  ? 'bg-saffron-500 text-white'
+                  : 'text-gray-300 hover:bg-navy-700 hover:text-white'
+                  }`}
               >
                 {item.label}
               </Link>
@@ -70,36 +84,19 @@ const Navbar: React.FC<NavbarProps> = ({ currentRole, onRoleChange }) => {
               </span>
             </button>
 
-            {/* Role Selector */}
-            <div className="relative">
-              <button
-                onClick={() => setIsRoleDropdownOpen(!isRoleDropdownOpen)}
-                className="flex items-center space-x-2 bg-navy-800 hover:bg-navy-700 px-4 py-2 rounded-lg transition-colors"
-              >
-                <User className="w-4 h-4" />
-                <span className="text-sm font-medium">{currentRoleData?.name}</span>
-                <ChevronDown className="w-4 h-4" />
-              </button>
-
-              {isRoleDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg">
-                  {roles.map((role) => (
-                    <button
-                      key={role.id}
-                      onClick={() => {
-                        onRoleChange(role.id);
-                        setIsRoleDropdownOpen(false);
-                      }}
-                      className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-50 transition-colors first:rounded-t-lg last:rounded-b-lg ${
-                        currentRole === role.id ? 'bg-saffron-50 text-saffron-700' : 'text-gray-700'
-                      }`}
-                    >
-                      {role.name}
-                    </button>
-                  ))}
-                </div>
-              )}
+            {/* Show current user role only */}
+            <div className="flex items-center space-x-2 bg-navy-800 px-4 py-2 rounded-lg">
+              <User className="w-4 h-4" />
+              <span className="text-sm font-medium">{currentRoleData?.name || currentRole}</span>
             </div>
+
+            {/* Logout button */}
+            <button
+              onClick={handleLogout}
+              className="ml-2 px-4 py-2 bg-saffron-500 hover:bg-saffron-600 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              Logout
+            </button>
           </div>
 
           {/* Mobile menu button */}
@@ -123,35 +120,28 @@ const Navbar: React.FC<NavbarProps> = ({ currentRole, onRoleChange }) => {
                 key={item.path}
                 to={item.path}
                 onClick={() => setIsMenuOpen(false)}
-                className={`block px-3 py-2 rounded-md text-base font-medium transition-colors ${
-                  location.pathname === item.path
-                    ? 'bg-saffron-500 text-white'
-                    : 'text-gray-300 hover:bg-navy-700 hover:text-white'
-                }`}
+                className={`block px-3 py-2 rounded-md text-base font-medium transition-colors ${location.pathname === item.path
+                  ? 'bg-saffron-500 text-white'
+                  : 'text-gray-300 hover:bg-navy-700 hover:text-white'
+                  }`}
               >
                 {item.label}
               </Link>
             ))}
+            {/* Logout button for mobile */}
+            <button
+              onClick={() => { setIsMenuOpen(false); handleLogout(); }}
+              className="w-full mt-2 px-3 py-2 rounded-md text-base font-medium bg-saffron-500 text-white"
+            >
+              Logout
+            </button>
           </div>
           <div className="pt-4 pb-3 border-t border-navy-700">
             <div className="px-2">
               <div className="text-sm text-gray-300 mb-2">Current Role:</div>
-              {roles.map((role) => (
-                <button
-                  key={role.id}
-                  onClick={() => {
-                    onRoleChange(role.id);
-                    setIsMenuOpen(false);
-                  }}
-                  className={`block w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                    currentRole === role.id
-                      ? 'bg-saffron-500 text-white'
-                      : 'text-gray-300 hover:bg-navy-700 hover:text-white'
-                  }`}
-                >
-                  {role.name}
-                </button>
-              ))}
+              <div className="block w-full text-left px-3 py-2 rounded-md text-sm font-medium bg-saffron-500 text-white">
+                {currentRoleData?.name || currentRole}
+              </div>
             </div>
           </div>
         </div>
