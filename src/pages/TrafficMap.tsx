@@ -1,8 +1,25 @@
-import React, { useState, useRef } from 'react';
-import { ZoomIn, ZoomOut, RotateCcw, MapPin, Brain as Train, AlertTriangle, Settings, Navigation } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { ZoomIn, ZoomOut, RotateCcw, MapPin, Brain, AlertTriangle, Settings, Navigation, Play, Square, RotateCw } from 'lucide-react';
 
 interface TrafficMapProps {
   currentRole: string;
+}
+
+interface Train {
+  id: string;
+  name: string;
+  pos: number;
+  speed: number;
+  priority: number;
+  delay: number;
+  line: 'up' | 'down';
+  color: string;
+  status: 'RUNNING' | 'HALTED' | 'COMPLETED' | 'BREAKDOWN';
+  route: 'main' | 'loop';
+}
+
+interface Signal {
+  aspect: 'GREEN' | 'RED';
 }
 
 const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
@@ -11,13 +28,32 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [selectedZone, setSelectedZone] = useState('all');
-  const [selectedElement, setSelectedElement] = useState<
-    | { type: 'station'; data: typeof stations[number] }
-    | { type: 'train'; data: typeof trains[number] }
-    | { type: 'conflict'; data: typeof conflicts[number] }
-    | null
-  >(null);
+  const [isSimulationRunning, setIsSimulationRunning] = useState(false);
+  const [tick, setTick] = useState(0);
+  const [optimizerStatus, setOptimizerStatus] = useState('IDLE');
+  const [eventLog, setEventLog] = useState<Array<{ message: string, type: string, tick: number }>>([]);
+  const [alerts, setAlerts] = useState<string[]>([]);
   const mapRef = useRef(null);
+  const simulationInterval = useRef<NodeJS.Timeout | null>(null);
+
+  const [trains, setTrains] = useState<Record<string, Train>>({});
+  const [signals, setSignals] = useState<Record<string, Signal>>({
+    'up_uri_entry': { aspect: 'GREEN' },
+    'up_uri_exit': { aspect: 'GREEN' },
+    'down_uri_entry': { aspect: 'GREEN' },
+    'down_uri_exit': { aspect: 'GREEN' },
+  });
+  const [network, setNetwork] = useState({ tracks: { 'URI_LOOP': 'EMPTY' } });
+
+  const trainTemplates: Record<string, Omit<Train, 'status' | 'route'>> = {
+    '12129': { id: '12129', name: 'Azad Hind Exp', pos: 5, speed: 2.0, priority: 8, delay: 5, line: 'up', color: 'bg-sky-500' },
+    '01555': { id: '01555', name: 'Goods UP', pos: 15, speed: 1.2, priority: 1, delay: 0, line: 'up', color: 'bg-amber-600' },
+    '12025': { id: '12025', name: 'Deccan Queen', pos: 25, speed: 2.5, priority: 10, delay: 0, line: 'up', color: 'bg-rose-600' },
+    '11078': { id: '11078', name: 'Jhelum Exp', pos: 95, speed: -2.2, priority: 8, delay: 0, line: 'down', color: 'bg-teal-500' },
+    '01488': { id: '01488', name: 'PUNE-DD MEMU', pos: 80, speed: -1.8, priority: 5, delay: 0, line: 'down', color: 'bg-lime-600' },
+    '01560': { id: '01560', name: 'Goods DOWN', pos: 65, speed: -1.2, priority: 1, delay: 0, line: 'down', color: 'bg-amber-600' },
+    '22159': { id: '22159', name: 'CSMT-MAS Exp', pos: 1, speed: 2.1, priority: 7, delay: 10, line: 'up', color: 'bg-fuchsia-500' },
+  };
 
   const zones = [
     { id: 'all', name: 'All India' },
@@ -28,43 +64,212 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     { id: 'southern', name: 'Southern Railway' },
   ];
 
-  const stations = [
-    { id: '1', name: 'New Delhi', code: 'NDLS', coordinates: { x: 400, y: 200 }, zone: 'northern', status: 'operational', trains: 15 },
-    { id: '2', name: 'Mumbai Central', code: 'BCT', coordinates: { x: 200, y: 400 }, zone: 'western', status: 'operational', trains: 12 },
-    { id: '3', name: 'Chennai Central', code: 'MAS', coordinates: { x: 500, y: 600 }, zone: 'southern', status: 'operational', trains: 8 },
-    { id: '4', name: 'Kolkata', code: 'KOAA', coordinates: { x: 600, y: 300 }, zone: 'eastern', status: 'operational', trains: 10 },
-    { id: '5', name: 'Bangalore', code: 'SBC', coordinates: { x: 450, y: 550 }, zone: 'southern', status: 'maintenance', trains: 6 },
-    { id: '6', name: 'Pune', code: 'PUNE', coordinates: { x: 250, y: 450 }, zone: 'central', status: 'operational', trains: 7 },
-    { id: '7', name: 'Ahmedabad', code: 'ADI', coordinates: { x: 150, y: 350 }, zone: 'western', status: 'operational', trains: 9 },
-    { id: '8', name: 'Hyderabad', code: 'HYB', coordinates: { x: 480, y: 500 }, zone: 'southern', status: 'operational', trains: 11 },
+  const logEvent = (message: string, type: string = 'info') => {
+    setEventLog(prev => [...prev, { message, type, tick }]);
+  };
+
+  const logAlert = (message: string) => {
+    setAlerts(prev => [message, ...prev.slice(0, 4)]);
+  };
+
+  const scenario = [
+    { time: 1, func: () => logEvent('High-density feed started.') },
+    {
+      time: 3,
+      func: () => {
+        logEvent('Conflict: 11078 Jhelum Exp catching up to 01560 Goods.', 'conflict');
+        logEvent('Conflict: 12025 Deccan Queen catching up to slower traffic.', 'conflict');
+        logAlert('Multiple conflicts detected.');
+      }
+    },
+    {
+      time: 4,
+      func: () => {
+        setOptimizerStatus('OPTIMIZING...');
+        logEvent('Triggering CP-SAT solver...');
+      }
+    },
+    {
+      time: 6,
+      func: () => {
+        setOptimizerStatus('EXECUTING PLAN');
+        logEvent('AI DECISION 1: Route 01560 Goods (DOWN) to URI loop for overtake.', 'decision');
+        setTrains(prev => ({
+          ...prev,
+          '01560': { ...prev['01560'], route: 'loop' }
+        }));
+      }
+    },
+    {
+      time: 9,
+      func: () => {
+        setTrains(prev => ({
+          ...prev,
+          '01560': { ...prev['01560'], status: 'HALTED', delay: prev['01560'].delay + 5 }
+        }));
+        setNetwork(prev => ({ ...prev, tracks: { URI_LOOP: 'OCCUPIED_BY_01560' } }));
+        logEvent('01560 Goods secured on loop. Passing 11078 Jhelum on main DOWN line.', 'info');
+      }
+    },
+    {
+      time: 12,
+      func: () => {
+        logEvent('AI DECISION 2: Route 01555 Goods (UP) to URI loop for overtake.', 'decision');
+        setTrains(prev => ({
+          ...prev,
+          '01555': { ...prev['01555'], route: 'loop' }
+        }));
+      }
+    },
+    {
+      time: 15,
+      func: () => {
+        setTrains(prev => ({
+          ...prev,
+          '01555': { ...prev['01555'], status: 'HALTED', delay: prev['01555'].delay + 5 }
+        }));
+        logEvent('01555 Goods secured on loop. Passing express trains.', 'info');
+      }
+    },
+    {
+      time: 22,
+      func: () => {
+        logEvent('High-priority traffic cleared. Resuming halted trains.', 'info');
+        logEvent('AI DECISION 3: Dispatch 01560 Goods from loop to main DOWN.', 'decision');
+        setTrains(prev => ({
+          ...prev,
+          '01560': { ...prev['01560'], status: 'RUNNING', route: 'main' }
+        }));
+      }
+    },
+    {
+      time: 23,
+      func: () => {
+        logEvent('AI DECISION 4: Dispatch 01555 Goods from loop to main UP.', 'decision');
+        setTrains(prev => ({
+          ...prev,
+          '01555': { ...prev['01555'], status: 'RUNNING', route: 'main' }
+        }));
+        setNetwork(prev => ({ ...prev, tracks: { URI_LOOP: 'EMPTY' } }));
+      }
+    },
+    {
+      time: 28,
+      func: () => {
+        logEvent('All conflicts resolved. Network stable.', 'info');
+        setOptimizerStatus('STABLE');
+      }
+    }
   ];
 
-  const trains = [
-    { id: '12345', name: 'Shatabdi Express', coordinates: { x: 350, y: 250 }, status: 'on-time', speed: 95, route: 'NDLS-CDG' },
-    { id: '12346', name: 'Rajdhani Express', coordinates: { x: 300, y: 350 }, status: 'delayed', speed: 110, route: 'BCT-NDLS' },
-    { id: '12347', name: 'Duronto Express', coordinates: { x: 480, y: 450 }, status: 'early', speed: 105, route: 'MAS-NDLS' },
-    { id: '12348', name: 'Garib Rath', coordinates: { x: 550, y: 350 }, status: 'on-time', speed: 85, route: 'KOAA-NDLS' },
-  ];
+  const setupSimulation = () => {
+    const newTrains: Record<string, Train> = {};
+    Object.entries(trainTemplates).forEach(([id, template]) => {
+      newTrains[id] = { ...template, status: 'RUNNING', route: 'main' };
+    });
+    setTrains(newTrains);
+    setSignals({
+      'up_uri_entry': { aspect: 'GREEN' },
+      'up_uri_exit': { aspect: 'GREEN' },
+      'down_uri_entry': { aspect: 'GREEN' },
+      'down_uri_exit': { aspect: 'GREEN' },
+    });
+    setNetwork({ tracks: { 'URI_LOOP': 'EMPTY' } });
+  };
 
-  const trackSegments = [
-    { id: '1', from: 'NDLS', to: 'BCT', status: 'free', occupancy: 0 },
-    { id: '2', from: 'NDLS', to: 'MAS', status: 'occupied', occupancy: 75 },
-    { id: '3', from: 'NDLS', to: 'KOAA', status: 'congested', occupancy: 90 },
-    { id: '4', from: 'BCT', to: 'PUNE', status: 'free', occupancy: 25 },
-    { id: '5', from: 'MAS', to: 'SBC', status: 'maintenance', occupancy: 0 },
-  ];
+  const simulationLoop = () => {
+    setTick(prevTick => {
+      const newTick = prevTick + 1;
 
-  const conflicts = [
-    { id: '1', location: { x: 380, y: 280 }, severity: 'high', trains: ['12345', '12349'] },
-    { id: '2', location: { x: 280, y: 380 }, severity: 'medium', trains: ['12346', '12350'] },
-  ];
+      setTrains(prevTrains => {
+        const updatedTrains = { ...prevTrains };
 
-  const handleMouseDown = (e: { clientX: number; clientY: number; }) => {
+        Object.entries(updatedTrains).forEach(([id, train]) => {
+          if (train.status === 'COMPLETED') return;
+
+          const canMove = train.status === 'RUNNING';
+          if (canMove) {
+            updatedTrains[id] = {
+              ...train,
+              pos: train.pos + train.speed
+            };
+          }
+
+          // Boundary checks
+          const updatedTrain = updatedTrains[id];
+          if ((updatedTrain.line === 'up' && updatedTrain.pos >= 100) ||
+            (updatedTrain.line === 'down' && updatedTrain.pos <= 0)) {
+            updatedTrains[id] = { ...updatedTrain, status: 'COMPLETED' };
+            logEvent(`${updatedTrain.name} (${id}) has exited the section.`);
+          }
+        });
+
+        return updatedTrains;
+      });
+
+      // Execute scenario events
+      scenario.forEach(event => {
+        if (event.time === newTick) {
+          event.func();
+        }
+      });
+
+      return newTick;
+    });
+  };
+
+  const startSimulation = () => {
+    if (simulationInterval.current) return;
+    setupSimulation();
+    setIsSimulationRunning(true);
+    setTick(0);
+    setEventLog([]);
+    setAlerts([]);
+    setOptimizerStatus('MONITORING');
+    simulationInterval.current = setInterval(simulationLoop, 1000);
+  };
+
+  const stopSimulation = () => {
+    if (simulationInterval.current) {
+      clearInterval(simulationInterval.current);
+      simulationInterval.current = null;
+    }
+    setIsSimulationRunning(false);
+    setOptimizerStatus('IDLE');
+  };
+
+  const resetSimulation = () => {
+    stopSimulation();
+    setTick(0);
+    setEventLog([]);
+    setAlerts(['No alerts.']);
+    setupSimulation();
+  };
+
+  const handleDisruption = () => {
+    const targetTrain = '12025';
+    if (!trains[targetTrain] || trains[targetTrain].status === 'COMPLETED') {
+      logEvent('Target train for disruption has already completed its run.', 'warning');
+      return;
+    }
+    logEvent(`EXTERNAL EVENT: Breakdown on ${targetTrain}!`, 'conflict');
+    logAlert(`CRITICAL: ${targetTrain} BREAKDOWN`);
+    setTrains(prev => ({
+      ...prev,
+      [targetTrain]: { ...prev[targetTrain], status: 'BREAKDOWN', delay: 45 }
+    }));
+    setTimeout(() => {
+      setOptimizerStatus('RE-OPTIMIZING...');
+      logEvent('Disruption! Re-running optimization for all trains...');
+    }, 1000);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
     setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
 
-  const handleMouseMove = (e: { clientX: number; clientY: number; }) => {
+  const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging) {
       setPan({
         x: e.clientX - dragStart.x,
@@ -77,12 +282,8 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     setIsDragging(false);
   };
 
-  interface ZoomDirection {
-    direction: 'in' | 'out';
-  }
-
-  const handleZoom = (direction: ZoomDirection['direction']) => {
-    setZoom((prev: number) => {
+  const handleZoom = (direction: 'in' | 'out') => {
+    setZoom(prev => {
       const newZoom = direction === 'in' ? prev * 1.2 : prev / 1.2;
       return Math.max(0.5, Math.min(3, newZoom));
     });
@@ -93,46 +294,58 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
     setPan({ x: 0, y: 0 });
   };
 
-  interface StationStatus {
-    status: 'operational' | 'maintenance' | 'blocked' | string;
-  }
-
-  const getStationColor = (status: StationStatus['status']): string => {
+  const getStatusColor = (status: string) => {
     switch (status) {
-      case 'operational': return 'fill-green-500 stroke-green-700';
-      case 'maintenance': return 'fill-yellow-500 stroke-yellow-700';
-      case 'blocked': return 'fill-red-500 stroke-red-700';
-      default: return 'fill-gray-500 stroke-gray-700';
+      case 'MONITORING': return 'bg-blue-500';
+      case 'OPTIMIZING...': case 'RE-OPTIMIZING...': return 'bg-yellow-500';
+      case 'EXECUTING PLAN': return 'bg-orange-500';
+      case 'STABLE': return 'bg-green-500';
+      default: return 'bg-gray-500';
     }
   };
 
-  const getTrainColor = (status: string) => {
-    switch (status) {
-      case 'on-time': return 'fill-green-600';
-      case 'delayed': return 'fill-red-600';
-      case 'early': return 'fill-blue-600';
-      default: return 'fill-gray-600';
+  const getEventColor = (type: string) => {
+    switch (type) {
+      case 'decision': return 'text-indigo-700 font-bold';
+      case 'conflict': return 'text-red-700 font-bold';
+      case 'warning': return 'text-amber-700';
+      default: return 'text-gray-600';
     }
   };
 
-  const getTrackColor = (status: string) => {
-    switch (status) {
-      case 'free': return 'stroke-green-500';
-      case 'occupied': return 'stroke-yellow-500';
-      case 'congested': return 'stroke-red-500';
-      case 'maintenance': return 'stroke-gray-500';
-      default: return 'stroke-gray-400';
-    }
-  };
+  useEffect(() => {
+    return () => {
+      if (simulationInterval.current) {
+        clearInterval(simulationInterval.current);
+      }
+    };
+  }, []);
 
-  const filteredStations = selectedZone === 'all' ? stations : stations.filter(s => s.zone === selectedZone);
+  // Initialize simulation on mount
+  useEffect(() => {
+    setupSimulation();
+    setAlerts(['No alerts.']);
+  }, []);
+
+  const activeTrains = Object.values(trains).filter(t => t.status !== 'COMPLETED');
+  const delayedTrains = activeTrains.filter(t => t.delay > 0);
+  const punctualityPercent = activeTrains.length > 0 ? ((activeTrains.length - delayedTrains.length) / activeTrains.length) * 100 : 100;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-navy-900">Traffic Control Map</h1>
-        <p className="text-gray-600 mt-2">Interactive network visualization and control</p>
+      <div className="mb-8 text-center">
+        <h1 className="text-4xl font-bold text-indigo-600 mb-2">🚂 AI-Powered Traffic Optimization</h1>
+        <p className="text-lg text-gray-600">Interactive network visualization and intelligent control system</p>
+      </div>
+
+      {/* Challenge Section */}
+      <div className="mb-8 bg-white rounded-lg shadow-lg p-6">
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">The Challenge: High-Density Traffic</h2>
+        <p className="text-gray-600">
+          Manually managing dozens of trains with varying priorities across limited tracks and signals is a massive
+          combinatorial challenge, leading to cascading delays and underutilization of infrastructure.
+        </p>
       </div>
 
       {/* Controls */}
@@ -144,30 +357,56 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
               <select
                 value={selectedZone}
                 onChange={(e) => setSelectedZone(e.target.value)}
-                className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-saffron-500 focus:border-transparent"
+                className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               >
                 {zones.map(zone => (
                   <option key={zone.id} value={zone.id}>{zone.name}</option>
                 ))}
               </select>
             </div>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={isSimulationRunning ? stopSimulation : startSimulation}
+                className={`px-4 py-2 text-white font-semibold rounded-lg transition-colors ${isSimulationRunning ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
+                  }`}
+              >
+                {isSimulationRunning ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                {isSimulationRunning ? 'Stop' : 'Start'} Simulation
+              </button>
+              <button
+                onClick={handleDisruption}
+                disabled={!isSimulationRunning}
+                className="px-4 py-2 bg-red-600 text-white font-semibold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                ⚡ Disruption
+              </button>
+              <button
+                onClick={resetSimulation}
+                className="px-4 py-2 bg-gray-500 text-white font-semibold rounded-lg hover:bg-gray-600 transition-colors"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            </div>
           </div>
           <div className="flex items-center space-x-2">
+            <div className={`px-4 py-2 text-white font-semibold rounded-lg min-w-[150px] text-center ${getStatusColor(optimizerStatus)}`}>
+              STATUS: {optimizerStatus}
+            </div>
             <button
               onClick={() => handleZoom('in')}
-              className="p-2 bg-navy-600 text-white rounded-lg hover:bg-navy-700 transition-colors"
+              className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
             >
               <ZoomIn className="w-4 h-4" />
             </button>
             <button
               onClick={() => handleZoom('out')}
-              className="p-2 bg-navy-600 text-white rounded-lg hover:bg-navy-700 transition-colors"
+              className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
             >
               <ZoomOut className="w-4 h-4" />
             </button>
             <button
               onClick={resetView}
-              className="p-2 bg-navy-600 text-white rounded-lg hover:bg-navy-700 transition-colors"
+              className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
             >
               <RotateCcw className="w-4 h-4" />
             </button>
@@ -176,11 +415,13 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-        {/* Map */}
+        {/* AI Control Center Map */}
         <div className="lg:col-span-3 bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="bg-navy-800 text-white p-4">
-            <h3 className="text-lg font-semibold">Network Overview</h3>
-            <p className="text-blue-200 text-sm">Zoom: {(zoom * 100).toFixed(0)}% | Active Trains: {trains.length}</p>
+          <div className="bg-gray-800 text-white p-4">
+            <h3 className="text-lg font-semibold">AI Control Center: PUNE - DD High-Density Section</h3>
+            <p className="text-blue-200 text-sm">
+              Tick: {tick}s | Zoom: {(zoom * 100).toFixed(0)}% | Active Trains: {activeTrains.length}
+            </p>
           </div>
 
           <div
@@ -191,327 +432,213 @@ const TrafficMap: React.FC<TrafficMapProps> = ({ currentRole }) => {
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
           >
-            <svg
-              width="100%"
-              height="100%"
-              viewBox="0 0 800 700"
+            <div
               style={{
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                 transformOrigin: 'center',
+                width: '100%',
+                height: '100%',
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                padding: '2rem'
               }}
-              className="bg-blue-50"
             >
-              {/* Grid */}
-              <defs>
-                <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
-                  <path d="M 50 0 L 0 0 0 50" fill="none" stroke="rgb(200, 200, 200)" strokeWidth="1" opacity="0.3" />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
+              {/* Track System */}
+              <div className="space-y-8 h-full flex flex-col justify-center">
+                {/* UP Line */}
+                <div className="relative">
+                  <div className="w-full h-2 bg-gray-600 rounded relative">
+                    {/* Stations */}
+                    <div className="absolute -top-6 left-[5%] text-white font-bold text-sm transform -translate-x-1/2">PUNE</div>
+                    <div className="absolute -top-6 left-[50%] text-white font-bold text-sm transform -translate-x-1/2">URI</div>
+                    <div className="absolute -top-6 left-[95%] text-white font-bold text-sm transform -translate-x-1/2">DD</div>
 
-              {/* Track Lines */}
-              <g className="tracks">
-                {trackSegments.map((segment) => {
-                  const fromStation = stations.find(s => s.code === segment.from);
-                  const toStation = stations.find(s => s.code === segment.to);
-                  if (!fromStation || !toStation) return null;
+                    {/* Signals */}
+                    <div
+                      className="absolute top-1/2 transform -translate-y-1/2 w-3 h-3 rounded-full border-2 border-gray-400"
+                      style={{ left: '48%', backgroundColor: signals.up_uri_entry.aspect === 'GREEN' ? '#22c55e' : '#ef4444' }}
+                    />
+                    <div
+                      className="absolute top-1/2 transform -translate-y-1/2 w-3 h-3 rounded-full border-2 border-gray-400"
+                      style={{ left: '52%', backgroundColor: signals.up_uri_exit.aspect === 'GREEN' ? '#22c55e' : '#ef4444' }}
+                    />
 
-                  return (
-                    <line
-                      key={segment.id}
-                      x1={fromStation.coordinates.x}
-                      y1={fromStation.coordinates.y}
-                      x2={toStation.coordinates.x}
-                      y2={toStation.coordinates.y}
-                      className={`${getTrackColor(segment.status)} stroke-4`}
-                      strokeDasharray={segment.status === 'maintenance' ? '10,5' : 'none'}
-                    />
-                  );
-                })}
-              </g>
+                    {/* UP Trains */}
+                    {Object.values(trains).filter(t => t.line === 'up' && t.status !== 'COMPLETED').map(train => (
+                      <div
+                        key={train.id}
+                        className={`absolute top-1/2 transform -translate-y-1/2 px-2 py-1 rounded text-white text-xs font-bold ${train.color} transition-all duration-1000 ${train.status === 'BREAKDOWN' ? 'animate-pulse border-2 border-red-500' : ''
+                          }`}
+                        style={{
+                          left: `${train.pos}%`,
+                          transform: train.route === 'loop' ? 'translateY(-200%)' : 'translateY(-50%)',
+                          opacity: train.status === 'COMPLETED' ? 0 : 1
+                        }}
+                      >
+                        {train.id} {train.name.split(' ')[0]}
+                        <span className={`ml-1 text-xs px-1 rounded ${train.delay > 0 ? 'bg-red-500' : 'bg-green-500'}`}>
+                          {train.delay > 0 ? `+${train.delay}m` : 'RT'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="absolute -bottom-4 left-0 text-white text-xs">UP LINE</div>
+                </div>
 
-              {/* Stations */}
-              <g className="stations">
-                {filteredStations.map((station) => (
-                  <g key={station.id}>
-                    <circle
-                      cx={station.coordinates.x}
-                      cy={station.coordinates.y}
-                      r="12"
-                      className={`${getStationColor(station.status)} cursor-pointer hover:opacity-80 stroke-2`}
-                      onClick={() => setSelectedElement({ type: 'station', data: station })}
-                    />
-                    <text
-                      x={station.coordinates.x}
-                      y={station.coordinates.y - 18}
-                      className="fill-navy-900 text-xs font-medium text-center"
-                      textAnchor="middle"
-                    >
-                      {station.code}
-                    </text>
-                    <text
-                      x={station.coordinates.x}
-                      y={station.coordinates.y + 25}
-                      className="fill-gray-600 text-xs text-center"
-                      textAnchor="middle"
-                    >
-                      {station.trains} trains
-                    </text>
-                  </g>
-                ))}
-              </g>
+                {/* Loop Line */}
+                <div className="flex justify-center">
+                  <div className="w-1/2 h-2 bg-gray-500 rounded relative">
+                    <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 text-white text-xs">LOOP</div>
+                  </div>
+                </div>
 
-              {/* Trains */}
-              <g className="trains">
-                {trains.map((train) => (
-                  <g key={train.id}>
-                    <rect
-                      x={train.coordinates.x - 8}
-                      y={train.coordinates.y - 6}
-                      width="16"
-                      height="12"
-                      rx="3"
-                      className={`${getTrainColor(train.status)} cursor-pointer hover:opacity-80`}
-                      onClick={() => setSelectedElement({ type: 'train', data: train })}
+                {/* DOWN Line */}
+                <div className="relative">
+                  <div className="w-full h-2 bg-gray-600 rounded relative">
+                    {/* Signals */}
+                    <div
+                      className="absolute top-1/2 transform -translate-y-1/2 w-3 h-3 rounded-full border-2 border-gray-400"
+                      style={{ left: '52%', backgroundColor: signals.down_uri_entry.aspect === 'GREEN' ? '#22c55e' : '#ef4444' }}
                     />
-                    <text
-                      x={train.coordinates.x}
-                      y={train.coordinates.y + 20}
-                      className="fill-navy-900 text-xs font-medium text-center"
-                      textAnchor="middle"
-                    >
-                      {train.id}
-                    </text>
-                  </g>
-                ))}
-              </g>
+                    <div
+                      className="absolute top-1/2 transform -translate-y-1/2 w-3 h-3 rounded-full border-2 border-gray-400"
+                      style={{ left: '48%', backgroundColor: signals.down_uri_exit.aspect === 'GREEN' ? '#22c55e' : '#ef4444' }}
+                    />
 
-              {/* Conflicts */}
-              <g className="conflicts">
-                {conflicts.map((conflict) => (
-                  <g key={conflict.id}>
-                    <circle
-                      cx={conflict.location.x}
-                      cy={conflict.location.y}
-                      r="15"
-                      className="fill-red-500 fill-opacity-30 stroke-red-600 stroke-2 animate-pulse cursor-pointer"
-                      onClick={() => setSelectedElement({ type: 'conflict', data: conflict })}
-                    />
-                    <AlertTriangle
-                      x={conflict.location.x - 6}
-                      y={conflict.location.y - 6}
-                      className="w-3 h-3 fill-red-600"
-                    />
-                  </g>
-                ))}
-              </g>
-            </svg>
+                    {/* DOWN Trains */}
+                    {Object.values(trains).filter(t => t.line === 'down' && t.status !== 'COMPLETED').map(train => (
+                      <div
+                        key={train.id}
+                        className={`absolute top-1/2 transform -translate-y-1/2 px-2 py-1 rounded text-white text-xs font-bold ${train.color} transition-all duration-1000 ${train.status === 'BREAKDOWN' ? 'animate-pulse border-2 border-red-500' : ''
+                          }`}
+                        style={{
+                          left: `${train.pos}%`,
+                          transform: train.route === 'loop' ? 'translateY(200%)' : 'translateY(-50%)',
+                          opacity: train.status === 'COMPLETED' ? 0 : 1
+                        }}
+                      >
+                        {train.id} {train.name.split(' ')[0]}
+                        <span className={`ml-1 text-xs px-1 rounded ${train.delay > 0 ? 'bg-red-500' : 'bg-green-500'}`}>
+                          {train.delay > 0 ? `+${train.delay}m` : 'RT'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="absolute -bottom-4 left-0 text-white text-xs">DOWN LINE</div>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Legend */}
           <div className="p-4 bg-gray-50 border-t">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
               <div className="space-y-2">
-                <h4 className="font-medium text-navy-900">Stations</h4>
+                <h4 className="font-medium text-gray-900">Trains</h4>
                 <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <span>Operational</span>
+                  <div className="w-3 h-2 bg-green-600 rounded"></div>
+                  <span>Running</span>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                  <span>Maintenance</span>
+                  <div className="w-3 h-2 bg-red-600 rounded animate-pulse"></div>
+                  <span>Breakdown</span>
                 </div>
               </div>
               <div className="space-y-2">
-                <h4 className="font-medium text-navy-900">Trains</h4>
+                <h4 className="font-medium text-gray-900">Signals</h4>
                 <div className="flex items-center space-x-2">
-                  <div className="w-3 h-2 bg-green-600 rounded"></div>
+                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <span>Clear</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                  <span>Stop</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <h4 className="font-medium text-gray-900">Status</h4>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs bg-green-500 text-white px-1 rounded">RT</span>
                   <span>On Time</span>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <div className="w-3 h-2 bg-red-600 rounded"></div>
+                  <span className="text-xs bg-red-500 text-white px-1 rounded">+5m</span>
                   <span>Delayed</span>
                 </div>
               </div>
               <div className="space-y-2">
-                <h4 className="font-medium text-navy-900">Tracks</h4>
+                <h4 className="font-medium text-gray-900">AI Actions</h4>
                 <div className="flex items-center space-x-2">
-                  <div className="w-4 h-1 bg-green-500"></div>
-                  <span>Free</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-1 bg-red-500"></div>
-                  <span>Congested</span>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <h4 className="font-medium text-navy-900">Conflicts</h4>
-                <div className="flex items-center space-x-2">
-                  <AlertTriangle className="w-3 h-3 text-red-600" />
-                  <span>Active Alert</span>
+                  <Brain className="w-3 h-3 text-indigo-600" />
+                  <span>Optimization</span>
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Details Panel */}
+        {/* Information Panels */}
         <div className="space-y-6">
-          {/* Selected Element Details */}
-          {selectedElement && (
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <h3 className="text-lg font-semibold text-navy-900 mb-4">
-                {selectedElement.type === 'station' ? 'Station Details' :
-                  selectedElement.type === 'train' ? 'Train Details' : 'Conflict Details'}
-              </h3>
-
-              {selectedElement.type === 'station' && (
-                <div className="space-y-3">
-                  <div>
-                    <span className="text-gray-600">Name:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.name}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Code:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.code}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Zone:</span>
-                    <span className="ml-2 font-medium capitalize">{selectedElement.data.zone} Railway</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Status:</span>
-                    <span className={`ml-2 font-medium capitalize ${selectedElement.data.status === 'operational' ? 'text-green-600' : 'text-yellow-600'
-                      }`}>
-                      {selectedElement.data.status}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Active Trains:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.trains}</span>
-                  </div>
-                  {currentRole === 'traffic-manager' && (
-                    <div className="pt-4 space-y-2">
-                      <button className="w-full bg-saffron-500 hover:bg-saffron-600 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                        Schedule Maintenance
-                      </button>
-                      <button className="w-full bg-navy-600 hover:bg-navy-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                        View Platform Status
-                      </button>
-                    </div>
-                  )}
-                </div>
+          {/* Live Data Feed & AI Decisions */}
+          <div className="bg-white rounded-lg shadow-lg p-4">
+            <h4 className="font-bold text-lg mb-2 text-center border-b pb-2">Live Data Feed & AI Decisions</h4>
+            <div className="h-64 overflow-y-auto space-y-1 text-sm">
+              {eventLog.length === 0 ? (
+                <p className="text-gray-500 text-center mt-8">Simulation has not started.</p>
+              ) : (
+                eventLog.slice(-20).map((event, index) => (
+                  <p key={index} className={getEventColor(event.type)}>
+                    <span className="font-mono">{event.tick.toString().padStart(2, '0')}s:</span> {event.message}
+                  </p>
+                ))
               )}
-
-              {selectedElement.type === 'train' && (
-                <div className="space-y-3">
-                  <div>
-                    <span className="text-gray-600">Name:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.name}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Number:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.id}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Route:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.route}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Status:</span>
-                    <span className={`ml-2 font-medium capitalize ${selectedElement.data.status === 'on-time' ? 'text-green-600' :
-                        selectedElement.data.status === 'delayed' ? 'text-red-600' : 'text-blue-600'
-                      }`}>
-                      {selectedElement.data.status}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Speed:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.speed} km/h</span>
-                  </div>
-                  {currentRole !== 'station-master' && (
-                    <div className="pt-4 space-y-2">
-                      <button className="w-full bg-saffron-500 hover:bg-saffron-600 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                        Reroute Train
-                      </button>
-                      <button className="w-full bg-navy-600 hover:bg-navy-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                        Priority Signal
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {selectedElement.type === 'conflict' && (
-                <div className="space-y-3">
-                  <div>
-                    <span className="text-gray-600">Severity:</span>
-                    <span className={`ml-2 font-medium capitalize ${selectedElement.data.severity === 'high' ? 'text-red-600' : 'text-yellow-600'
-                      }`}>
-                      {selectedElement.data.severity}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Affected Trains:</span>
-                    <span className="ml-2 font-medium">{selectedElement.data.trains.join(', ')}</span>
-                  </div>
-                  <div className="pt-4 space-y-2">
-                    <button className="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                      Resolve Conflict
-                    </button>
-                    <button className="w-full bg-saffron-500 hover:bg-saffron-600 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                      View Suggestions
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Quick Stats */}
-          <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-semibold text-navy-900 mb-4">Network Status</h3>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Active Trains</span>
-                <span className="font-bold text-navy-900">{trains.length}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Operational Stations</span>
-                <span className="font-bold text-green-600">
-                  {stations.filter(s => s.status === 'operational').length}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Active Conflicts</span>
-                <span className="font-bold text-red-600">{conflicts.length}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-600">Maintenance</span>
-                <span className="font-bold text-yellow-600">
-                  {stations.filter(s => s.status === 'maintenance').length}
-                </span>
-              </div>
             </div>
           </div>
 
-          {/* Quick Actions */}
-          {currentRole === 'traffic-manager' && (
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <h3 className="text-lg font-semibold text-navy-900 mb-4">Quick Actions</h3>
-              <div className="space-y-3">
-                <button className="w-full bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                  Emergency Stop All
-                </button>
-                <button className="w-full bg-saffron-500 hover:bg-saffron-600 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                  Generate Report
-                </button>
-                <button className="w-full bg-navy-600 hover:bg-navy-700 text-white px-4 py-2 rounded-lg transition-colors text-sm">
-                  Broadcast Alert
-                </button>
-              </div>
+          {/* Network State */}
+          <div className="bg-gray-900 text-white rounded-lg shadow-lg p-4">
+            <h4 className="font-bold text-lg mb-2 text-center border-b border-gray-600 pb-2">Live Network State</h4>
+            <pre className="h-32 overflow-y-auto text-xs font-mono">
+              {JSON.stringify({
+                active_trains: activeTrains.length,
+                signals: {
+                  up_uri_entry: signals.up_uri_entry.aspect,
+                  up_uri_exit: signals.up_uri_exit.aspect,
+                  down_uri_entry: signals.down_uri_entry.aspect,
+                  down_uri_exit: signals.down_uri_exit.aspect
+                },
+                tracks: {
+                  URI_LOOP: network.tracks.URI_LOOP
+                },
+                train_details: activeTrains.map(t => ({
+                  id: t.id,
+                  pos: parseFloat(t.pos.toFixed(1)),
+                  status: t.status,
+                  delay: t.delay
+                }))
+              }, null, 2)}
+            </pre>
+          </div>
+          {/* Alerts Panel */}
+          <div className="bg-white rounded-lg shadow-lg p-4">
+            <h4 className="font-bold text-lg mb-2 text-center border-b pb-2">Alerts</h4>
+            <div className="h-24 overflow-y-auto space-y-1 text-sm">
+              {alerts.length === 0 ? (
+                <p className="text-gray-500 text-center mt-4">No alerts.</p>
+              ) : (
+                alerts.map((alert, idx) => (
+                  <p key={idx} className="text-red-600 font-semibold">{alert}</p>
+                ))
+              )}
             </div>
-          )}
+          </div>
+          {/* Punctuality Panel */}
+          <div className="bg-white rounded-lg shadow-lg p-4">
+            <h4 className="font-bold text-lg mb-2 text-center border-b pb-2">Punctuality</h4>
+            <div className="flex flex-col items-center">
+              <span className="text-3xl font-bold text-green-600">{punctualityPercent.toFixed(1)}%</span>
+              <span className="text-xs text-gray-500">Trains On Time</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
